@@ -1,5 +1,5 @@
 const MODEL_ID = 'Xenova/segformer-b0-finetuned-ade-512-512'
-const segmenters = new Map()
+let segmenterPromise = null
 
 const OCCLUSION_KEYWORDS = [
   'chair','sofa','couch','table','desk','person','plant','potted plant','bed','cabinet','armchair',
@@ -8,7 +8,7 @@ const OCCLUSION_KEYWORDS = [
 
 function errorText(error) {
   if (!error) return 'Erro desconhecido'
-  if (typeof error === 'string') return error
+  if (typeof error === 'string' || typeof error === 'number') return String(error)
   if (error.message) return String(error.message)
   try {
     const json = JSON.stringify(error)
@@ -26,35 +26,47 @@ function progressPercent(event) {
   return null
 }
 
-async function buildSegmenter(device, onProgress) {
+async function createSegmenter(onProgress) {
   const { pipeline, env } = await import('@huggingface/transformers')
+
   env.allowLocalModels = false
   env.allowRemoteModels = true
   env.useBrowserCache = true
 
+  // Importante: este modelo Xenova é publicado para uso direto no pipeline.
+  // Não forçamos device/dtype aqui. O Transformers.js escolhe o backend e
+  // a variante compatível do modelo para o navegador.
   return pipeline('image-segmentation', MODEL_ID, {
-    device,
-    dtype: device === 'webgpu' ? 'fp16' : 'q8',
     progress_callback: (event) => {
       onProgress?.({
         status: event?.status || 'loading',
         file: event?.file || '',
         percent: progressPercent(event),
-        device,
+        device: 'wasm',
       })
     },
   })
 }
 
-async function getSegmenter(device, onProgress) {
-  if (!segmenters.has(device)) {
-    const promise = buildSegmenter(device, onProgress).catch((error) => {
-      segmenters.delete(device)
-      throw error
+async function getSegmenter(onProgress) {
+  if (!segmenterPromise) {
+    segmenterPromise = createSegmenter(onProgress).catch((error) => {
+      segmenterPromise = null
+      throw new Error(`Não foi possível carregar o modelo de piso: ${errorText(error)}`)
     })
-    segmenters.set(device, promise)
   }
-  return segmenters.get(device)
+  return segmenterPromise
+}
+
+export async function preloadFloorAI(onProgress) {
+  try {
+    await getSegmenter(onProgress)
+    onProgress?.({ status: 'ready', percent: 100, device: 'wasm' })
+    return true
+  } catch (error) {
+    console.warn('Pré-carregamento da IA não concluiu:', error)
+    return false
+  }
 }
 
 function normalizeMask(raw) {
@@ -90,7 +102,8 @@ function keepBestFloorComponent(mask) {
 
     while(head<tail){
       const idx=queue[head++],x=idx%w,y=(idx/w)|0
-      count+=1;maxY=Math.max(maxY,y);minY=Math.min(minY,y);minX=Math.min(minX,x);maxX=Math.max(maxX,x)
+      count+=1
+      maxY=Math.max(maxY,y);minY=Math.min(minY,y);minX=Math.min(minX,x);maxX=Math.max(maxX,x)
       const push=(n)=>{if(n>=0&&n<total&&!labels[n]&&data[n]>=128){labels[n]=label;queue[tail++]=n}}
       if(x>0)push(idx-1)
       if(x+1<w)push(idx+1)
@@ -116,7 +129,7 @@ function keepBestFloorComponent(mask) {
   return {width:w,height:h,data:out}
 }
 
-function majorityPass(mask, fillThreshold, removeThreshold) {
+function majorityPass(mask) {
   const {width:w,height:h,data}=mask
   const out=new Uint8ClampedArray(data)
   for(let y=1;y<h-1;y+=1){
@@ -129,17 +142,15 @@ function majorityPass(mask, fillThreshold, removeThreshold) {
           if(data[(y+yy)*w+x+xx]>=128) neighbors+=1
         }
       }
-      if(data[idx]>=128 && neighbors<=removeThreshold) out[idx]=0
-      else if(data[idx]<128 && neighbors>=fillThreshold) out[idx]=255
+      if(data[idx]>=128 && neighbors<=1) out[idx]=0
+      else if(data[idx]<128 && neighbors>=7) out[idx]=255
     }
   }
   return {width:w,height:h,data:out}
 }
 
 function refineFloorMask(mask) {
-  const main=keepBestFloorComponent(mask)
-  const pass1=majorityPass(main,6,1)
-  return majorityPass(pass1,7,0)
+  return majorityPass(keepBestFloorComponent(mask))
 }
 
 function mergeMasks(masks, width, height) {
@@ -186,37 +197,23 @@ function buildOcclusionMask(outputs, width, height) {
   }
 }
 
-async function runSegmentation(imageUrl, device, onProgress) {
-  const segmenter = await getSegmenter(device, onProgress)
-  onProgress?.({ status: 'inferencing', percent: null, device })
-  const outputs = await segmenter(imageUrl)
-  if (!Array.isArray(outputs) || !outputs.length) throw new Error('O modelo não retornou nenhuma segmentação.')
-  return outputs
-}
-
 export async function segmentFloor(imageUrl, onProgress) {
   if (!imageUrl) throw new Error('Imagem não recebida pela IA.')
 
-  const canUseWebGPU = typeof navigator !== 'undefined' && !!navigator.gpu
-  let outputs
-  let device = canUseWebGPU ? 'webgpu' : 'wasm'
+  onProgress?.({ status: 'preparing', percent: 0, device: 'wasm' })
 
-  onProgress?.({ status: 'preparing', percent: 0, device })
+  const segmenter = await getSegmenter(onProgress)
+  onProgress?.({ status: 'inferencing', percent: null, device: 'wasm' })
+
+  let outputs
   try {
-    outputs = await runSegmentation(imageUrl, device, onProgress)
-  } catch (gpuError) {
-    if (device !== 'webgpu') {
-      throw new Error(`Falha ao executar o modelo no navegador: ${errorText(gpuError)}`)
-    }
-    console.warn('WebGPU falhou; usando WASM q8.', gpuError)
-    segmenters.delete('webgpu')
-    device = 'wasm'
-    onProgress?.({ status: 'fallback', percent: null, device })
-    try {
-      outputs = await runSegmentation(imageUrl, device, onProgress)
-    } catch (wasmError) {
-      throw new Error(`Falha ao executar a IA (GPU e CPU): ${errorText(wasmError)}`)
-    }
+    outputs = await segmenter(imageUrl)
+  } catch (error) {
+    throw new Error(`Falha ao executar o modelo de piso: ${errorText(error)}`)
+  }
+
+  if (!Array.isArray(outputs) || !outputs.length) {
+    throw new Error('O modelo não retornou nenhuma segmentação.')
   }
 
   const floorSegments = outputs.filter((item) => isFloor(item?.label))
@@ -225,18 +222,18 @@ export async function segmentFloor(imageUrl, onProgress) {
     throw new Error(`O modelo não identificou piso. Classes encontradas: ${labels.join(', ') || 'nenhuma'}.`)
   }
 
-  const bestFloor = floorSegments.sort((a, b) => (b.score || 0) - (a.score || 0))[0]
+  const bestFloor = floorSegments[0]
   const rawFloorMask = normalizeMask(bestFloor.mask)
   const floorMask = refineFloorMask(rawFloorMask)
   const occlusion = buildOcclusionMask(outputs, floorMask.width, floorMask.height)
 
-  onProgress?.({ status: 'done', percent: 100, device })
+  onProgress?.({ status: 'done', percent: 100, device: 'wasm' })
   return {
     width: floorMask.width,
     height: floorMask.height,
     data: floorMask.data,
     score: bestFloor.score ?? null,
-    device,
+    device: 'wasm',
     occlusionMask: occlusion.mask,
     detectedObjects: occlusion.labels,
     refined: true,
