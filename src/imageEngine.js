@@ -1,3 +1,5 @@
+import { computeHomography, projectPoint } from './perspective'
+
 export const PRODUCTS = [
   { id:'oak', name:'Carvalho Natural', base:'#b98a5a', line:'#6f4e33', type:'wood' },
   { id:'walnut', name:'Nogueira Premium', base:'#6a4736', line:'#302019', type:'wood' },
@@ -36,10 +38,73 @@ function textureCanvas(w,h,p){
   x.globalAlpha=1;return c
 }
 
-export function render({canvas,image,mask,product,mode='result',strength=.92}){
+function drawMaskTint(ctx, maskData, w, h, alpha=.28){
+  const base=ctx.getImageData(0,0,w,h)
+  for(let i=0;i<w*h;i++){
+    const p=i*4,a=(maskData[p]/255)*alpha
+    if(!a)continue
+    base.data[p]=base.data[p]*(1-a)+65*a
+    base.data[p+1]=base.data[p+1]*(1-a)+105*a
+    base.data[p+2]=base.data[p+2]*(1-a)+225*a
+  }
+  ctx.putImageData(base,0,0)
+}
+
+function drawPerspective(ctx, perspective, draftPoints=[]){
+  if(perspective?.points?.length===4){
+    const unit=[{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}]
+    const H=perspective.matrix || computeHomography(unit,perspective.points)
+
+    ctx.save()
+    ctx.lineWidth=2
+    ctx.strokeStyle='rgba(130,160,255,.92)'
+    ctx.fillStyle='rgba(65,105,225,.08)'
+    ctx.beginPath()
+    perspective.points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y))
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+
+    ctx.lineWidth=1
+    ctx.strokeStyle='rgba(160,180,255,.48)'
+    for(let i=1;i<10;i++){
+      const t=i/10
+      let a=projectPoint(H,{x:t,y:0}),b=projectPoint(H,{x:t,y:1})
+      ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()
+      a=projectPoint(H,{x:0,y:t});b=projectPoint(H,{x:1,y:t})
+      ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()
+    }
+
+    perspective.points.forEach((p,i)=>{
+      ctx.beginPath();ctx.fillStyle='#4169e1';ctx.arc(p.x,p.y,9,0,Math.PI*2);ctx.fill()
+      ctx.beginPath();ctx.fillStyle='#fff';ctx.arc(p.x,p.y,3,0,Math.PI*2);ctx.fill()
+      ctx.font='700 13px Inter, sans-serif';ctx.fillStyle='#fff';ctx.fillText(String(i+1),p.x+13,p.y-10)
+    })
+    ctx.restore()
+  }
+
+  if(draftPoints?.length){
+    ctx.save()
+    ctx.lineWidth=2
+    ctx.strokeStyle='rgba(255,255,255,.8)'
+    ctx.setLineDash([7,7])
+    ctx.beginPath()
+    draftPoints.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y))
+    ctx.stroke()
+    ctx.setLineDash([])
+    draftPoints.forEach((p,i)=>{
+      ctx.beginPath();ctx.fillStyle='#fff';ctx.arc(p.x,p.y,8,0,Math.PI*2);ctx.fill()
+      ctx.font='700 12px Inter, sans-serif';ctx.fillStyle='#0a0d13';ctx.fillText(String(i+1),p.x-3.5,p.y+4)
+    })
+    ctx.restore()
+  }
+}
+
+export function render({canvas,image,mask,product,mode='result',strength=.92,perspective=null,draftPoints=[]}){
   if(!canvas||!image)return; const w=image.naturalWidth,h=image.naturalHeight;canvas.width=w;canvas.height=h;const x=canvas.getContext('2d',{willReadFrequently:true});x.drawImage(image,0,0,w,h);if(!mask||mode==='original')return
   const mc=maskCanvas(mask,w,h),m=mc.getContext('2d',{willReadFrequently:true}).getImageData(0,0,w,h).data
-  if(mode==='mask'){const o=x.getImageData(0,0,w,h);for(let i=0;i<w*h;i++){const a=(m[i*4]/255)*.42,p=i*4;if(a){o.data[p]=o.data[p]*(1-a)+65*a;o.data[p+1]=o.data[p+1]*(1-a)+105*a;o.data[p+2]=o.data[p+2]*(1-a)+225*a}}x.putImageData(o,0,0);return}
+  if(mode==='mask'){drawMaskTint(x,m,w,h,.42);return}
+  if(mode==='perspective'){drawMaskTint(x,m,w,h,.18);drawPerspective(x,perspective,draftPoints);return}
   if(!product)return; const t=textureCanvas(w,h,product).getContext('2d',{willReadFrequently:true}).getImageData(0,0,w,h),o=x.getImageData(0,0,w,h),z=x.createImageData(w,h)
   for(let i=0;i<w*h;i++){const p=i*4,a=(m[p]/255)*strength,r=o.data[p],g=o.data[p+1],b=o.data[p+2],lum=(.2126*r+.7152*g+.0722*b)/255,f=.5+lum*.75;z.data[p]=r*(1-a)+Math.min(255,t.data[p]*f)*a;z.data[p+1]=g*(1-a)+Math.min(255,t.data[p+1]*f)*a;z.data[p+2]=b*(1-a)+Math.min(255,t.data[p+2]*f)*a;z.data[p+3]=255}x.putImageData(z,0,0)
 }
