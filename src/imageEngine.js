@@ -34,13 +34,30 @@ function rawMaskCanvas(mask){
   sx.putImageData(d,0,0);return s
 }
 
-function buildMaskCanvas(mask,w,h,{feather=0}={}){
+function scaledHardMask(mask,w,h){
   const s=rawMaskCanvas(mask)
-  const t=document.createElement('canvas');t.width=w;t.height=h;const tx=t.getContext('2d')
-  tx.imageSmoothingEnabled=true
-  if(feather>0){tx.save();tx.filter=`blur(${feather}px)`;tx.drawImage(s,0,0,w,h);tx.restore()}
-  else tx.drawImage(s,0,0,w,h)
-  return t
+  const hard=document.createElement('canvas');hard.width=w;hard.height=h
+  const hx=hard.getContext('2d')
+  hx.imageSmoothingEnabled=true
+  hx.drawImage(s,0,0,w,h)
+  return hard
+}
+
+function buildMaskCanvas(mask,w,h,{feather=0,inward=true}={}){
+  const hard=scaledHardMask(mask,w,h)
+  if(feather<=0) return hard
+
+  const soft=document.createElement('canvas');soft.width=w;soft.height=h
+  const sx=soft.getContext('2d')
+  sx.save();sx.filter=`blur(${feather}px)`;sx.drawImage(hard,0,0);sx.restore()
+
+  // Para piso, o fade deve acontecer SOMENTE para dentro. Sem este recorte,
+  // o blur aumenta a máscara e pinta tapete, móveis e superfícies verticais.
+  if(inward){
+    sx.save();sx.globalCompositeOperation='destination-in';sx.drawImage(hard,0,0);sx.restore()
+  }
+
+  return soft
 }
 
 function textureCanvas(w,h,p){
@@ -77,7 +94,9 @@ function blendFloor(ctx,image,maskCanvas,product,w,h,strength){
 
 function drawOcclusionLayer(ctx,image,occlusionMask,w,h){
   if(!occlusionMask?.data) return
-  const maskCanvas=buildMaskCanvas(occlusionMask,w,h,{feather:1})
+  // Aqui um pequeno fade para fora é desejável: a imagem original dos
+  // objetos deve cobrir 1px da borda do piso, evitando halos.
+  const maskCanvas=buildMaskCanvas(occlusionMask,w,h,{feather:.8,inward:false})
   ctx.save();ctx.drawImage(image,0,0,w,h);ctx.globalCompositeOperation='destination-in';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
 }
 
@@ -133,8 +152,9 @@ export function renderScene({baseCanvas,floorCanvas,objectCanvas,uiCanvas,image,
   bx.drawImage(image,0,0,w,h)
   if(!mask){ if(draftPoints?.length) drawDraftQuad(ux,draftPoints); return }
 
-  const displayMask=buildMaskCanvas(mask,w,h,{feather:1.2})
-  const floorMask=buildMaskCanvas(mask,w,h,{feather:1.6})
+  const displayMask=buildMaskCanvas(mask,w,h,{feather:.8,inward:true})
+  const floorMask=buildMaskCanvas(mask,w,h,{feather:1.1,inward:true})
+
   if(mode==='mask') drawMaskMode(ux,displayMask,w,h)
   if(mode==='perspective') drawFocusOverlay(ux,displayMask,w,h)
   if(mode!=='original'&&mode!=='mask'&&product) blendFloor(fx,image,floorMask,product,w,h,strength)
@@ -151,9 +171,8 @@ export function exportCleanScene({image,mask,product,strength=.92}){
   out.drawImage(image,0,0,w,h)
   if(!mask||!product) return output
 
-  // Renderização totalmente nova: nenhuma camada de UI, grade, ponto ou contorno é reutilizada.
   const cleanFloor=document.createElement('canvas');cleanFloor.width=w;cleanFloor.height=h
-  const floorMask=buildMaskCanvas(mask,w,h,{feather:1.6})
+  const floorMask=buildMaskCanvas(mask,w,h,{feather:1.1,inward:true})
   blendFloor(cleanFloor.getContext('2d'),image,floorMask,product,w,h,strength)
   out.drawImage(cleanFloor,0,0)
 
