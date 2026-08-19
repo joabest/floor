@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { segmentFloor } from './segmentFloor'
-import { PRODUCTS, loadImage, polygonMask, renderScene, swatch } from './imageEngine'
+import { PRODUCTS, exportCleanScene, loadImage, polygonMask, renderScene, swatch } from './imageEngine'
 import { buildPerspective, estimateFloorPerspective, homographyText } from './perspective'
 
 export default function App(){
@@ -47,13 +47,15 @@ export default function App(){
     setBusy(true);setError('');setFloorManual(false);setPerspectiveManual(false);setPerspectiveDraft([]);setFloorPoints([])
     try{
       const m=await segmentFloor(room.dataUrl,e=>{
-        if(e.status==='inferencing') setStatus('Identificando e refinando o piso…')
-        else setStatus('Carregando IA no navegador…')
+        if(e.status==='fallback') setStatus('GPU indisponível. Continuando em CPU otimizada…')
+        else if(e.status==='inferencing') setStatus(e.device==='webgpu'?'Detectando piso com GPU…':'Detectando piso com CPU otimizada…')
+        else if(typeof e.percent==='number') setStatus(`Carregando IA… ${e.percent}%`)
+        else setStatus('Preparando IA…')
       })
       setMask(m)
       try{
         const p=estimateFloorPerspective(m,room.width,room.height)
-        setPerspective(p);setMode('perspective');setStatus('Piso detectado e refinado. Confira a perspectiva ou veja o resultado.')
+        setPerspective(p);setMode('result');setStatus(`Piso detectado${m.device==='webgpu'?' com GPU':''}. Resultado pronto para revisar.`)
       }catch(perspectiveError){
         setPerspective(null);setMode('mask');setStatus('Piso detectado. Ajuste os 4 pontos da perspectiva manualmente.')
         setError(perspectiveError.message)
@@ -87,7 +89,7 @@ export default function App(){
       const n=[...floorPoints,p];setFloorPoints(n)
       if(n.length===4){
         const m=polygonMask(room.width,room.height,n)
-        setMask(m);setPerspective(buildPerspective(n,room.width,room.height,'manual-floor'));setFloorManual(false);setFloorPoints([]);setMode('perspective')
+        setMask(m);setPerspective(buildPerspective(n,room.width,room.height,'manual-floor'));setFloorManual(false);setFloorPoints([]);setMode('result')
         setStatus('Piso e perspectiva definidos manualmente.')
       }
       return
@@ -95,8 +97,8 @@ export default function App(){
     if(perspectiveManual&&perspectiveDraft.length<4){
       const n=[...perspectiveDraft,p];setPerspectiveDraft(n)
       if(n.length===4){
-        setPerspective(buildPerspective(n,room.width,room.height,'manual'));setPerspectiveManual(false);setPerspectiveDraft([]);setMode('perspective')
-        setStatus('Perspectiva ajustada. Homografia 3×3 recalculada.')
+        setPerspective(buildPerspective(n,room.width,room.height,'manual'));setPerspectiveManual(false);setPerspectiveDraft([]);setMode('result')
+        setStatus('Perspectiva ajustada. Resultado atualizado.')
       }
     }
   }
@@ -109,14 +111,17 @@ export default function App(){
 
   function download(){
     if(!room||!mask)return
-    const temp=document.createElement('canvas')
-    temp.width=room.width;temp.height=room.height
-    const x=temp.getContext('2d')
-    x.drawImage(baseCanvasRef.current,0,0)
-    x.drawImage(floorCanvasRef.current,0,0)
-    x.drawImage(objectCanvasRef.current,0,0)
-    const a=document.createElement('a');a.download='floor-vision.png';a.href=temp.toDataURL('image/png');a.click()
-    setStatus('PNG exportado sem linhas, pontos ou marcações da interface.')
+    try{
+      const clean=exportCleanScene({image:room.image,mask,product,strength:strength/100})
+      const a=document.createElement('a')
+      const stamp=new Date().toISOString().replace(/[:.]/g,'-')
+      a.download=`floor-vision-clean-${stamp}.png`
+      a.href=clean.toDataURL('image/png')
+      a.click()
+      setStatus('PNG limpo exportado: sem grade, pontos, contornos ou linhas da IA.')
+    }catch(e){
+      setError(`Falha ao exportar PNG: ${e.message||e}`)
+    }
   }
 
   const hintCount=floorManual?floorPoints.length:perspectiveDraft.length
@@ -155,7 +160,7 @@ export default function App(){
 
         {mask&&<div className="perspectiveCard">
           <div className="perspectiveTitle"><div><small>CAMADAS</small><b>Piso separado do restante</b></div><span className="ready">ATIVO</span></div>
-          <p>O piso fica em uma camada própria e os objetos detectados permanecem por cima. As marcações de edição não entram no PNG final.</p>
+          <p>O piso fica em uma camada própria e os objetos detectados permanecem por cima. A exportação é refeita do zero, sem reutilizar a camada de interface.</p>
         </div>}
 
         {mask&&<div className="perspectiveCard">
@@ -163,10 +168,10 @@ export default function App(){
           {perspective?<><p>{perspective.source==='auto'?'4 cantos estimados a partir da máscara refinada da IA.':'4 cantos definidos manualmente.'}</p><div className="matrix"><span>Homografia H · 3×3</span>{matrix.map((row,i)=><code key={i}>{row.map(v=>Number(v).toFixed(3)).join('   ')}</code>)}</div><div className="perspectiveButtons"><button onClick={()=>setMode('perspective')}>Ver grade</button><button onClick={copyMatrix}>Copiar H</button></div></>:<><p>A máscara existe, mas a geometria precisa ser definida.</p><button className="fullSecondary" onClick={startPerspectiveManual}>Definir 4 pontos</button></>}
         </div>}
 
-        <div className="control"><label>Intensidade <b>{strength}%</b></label><input type="range" min="55" max="100" value={strength} onChange={e=>setStrength(+e.target.value)}/><p>Sombras e iluminação da foto original são preservadas. O contorno de edição aparece apenas nos modos Área destacada e Perspectiva.</p></div>
+        <div className="control"><label>Intensidade <b>{strength}%</b></label><input type="range" min="55" max="100" value={strength} onChange={e=>setStrength(+e.target.value)}/><p>Sombras e iluminação da foto original são preservadas. As linhas de edição nunca entram no PNG limpo.</p></div>
         <button className="download" disabled={!mask||busy} onClick={download}>↓ Baixar PNG limpo</button>
       </aside>
     </main>
-    <footer>Camadas ativas · exportação limpa sem overlays da interface</footer>
+    <footer>Floor Vision v0.2.5 · export offscreen limpo · WebGPU com fallback q8</footer>
   </div>
 }
