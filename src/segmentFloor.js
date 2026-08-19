@@ -33,8 +33,6 @@ async function buildSegmenter(onProgress) {
   env.allowRemoteModels = true
   env.useBrowserCache = true
 
-  // Modo de compatibilidade para Vercel/navegadores.
-  // Um único thread evita depender de cross-origin isolation para WASM multithread.
   if (env.backends?.onnx?.wasm) {
     env.backends.onnx.wasm.numThreads = 1
   }
@@ -79,6 +77,74 @@ function normalizeMask(raw) {
   }
 
   return { width: raw.width, height: raw.height, data: mask }
+}
+
+function keepBestFloorComponent(mask) {
+  const { width:w, height:h, data } = mask
+  const total=w*h
+  const labels=new Int32Array(total)
+  const queue=new Int32Array(total)
+  const stats=[]
+  let label=0
+
+  for(let start=0;start<total;start+=1){
+    if(data[start]<128||labels[start]) continue
+    label+=1
+    let head=0,tail=0,count=0,maxY=0,minY=h
+    queue[tail++]=start;labels[start]=label
+
+    while(head<tail){
+      const idx=queue[head++],x=idx%w,y=(idx/w)|0
+      count+=1;maxY=Math.max(maxY,y);minY=Math.min(minY,y)
+      const push=(n)=>{if(n>=0&&n<total&&!labels[n]&&data[n]>=128){labels[n]=label;queue[tail++]=n}}
+      if(x>0)push(idx-1)
+      if(x+1<w)push(idx+1)
+      if(y>0)push(idx-w)
+      if(y+1<h)push(idx+w)
+    }
+
+    const bottomness=maxY/Math.max(1,h-1)
+    const verticalSpan=(maxY-minY+1)/h
+    const score=count*(.62+.28*bottomness+.10*Math.min(1,verticalSpan*2))
+    stats.push({label,count,score})
+  }
+
+  if(!stats.length) return mask
+  const best=stats.sort((a,b)=>b.score-a.score)[0]
+  if(best.count<Math.max(80,total*.0025)) return mask
+
+  const out=new Uint8ClampedArray(total)
+  for(let i=0;i<total;i+=1) if(labels[i]===best.label) out[i]=255
+  return {width:w,height:h,data:out}
+}
+
+function smoothFloorMask(mask) {
+  const {width:w,height:h,data}=mask
+  const out=new Uint8ClampedArray(data)
+
+  for(let y=1;y<h-1;y+=1){
+    for(let x=1;x<w-1;x+=1){
+      const idx=y*w+x
+      let neighbors=0
+      for(let yy=-1;yy<=1;yy+=1){
+        for(let xx=-1;xx<=1;xx+=1){
+          if(xx===0&&yy===0) continue
+          if(data[(y+yy)*w+x+xx]>=128) neighbors+=1
+        }
+      }
+      if(data[idx]>=128){
+        if(neighbors<=1) out[idx]=0
+      }else if(neighbors>=7){
+        out[idx]=255
+      }
+    }
+  }
+
+  return {width:w,height:h,data:out}
+}
+
+function refineFloorMask(mask) {
+  return smoothFloorMask(keepBestFloorComponent(mask))
 }
 
 function mergeMasks(masks, width, height) {
@@ -157,9 +223,9 @@ export async function segmentFloor(imageUrl, onProgress) {
   }
 
   const bestFloor = floorSegments.sort((a, b) => (b.score || 0) - (a.score || 0))[0]
-  const floorMask = normalizeMask(bestFloor.mask)
+  const rawFloorMask = normalizeMask(bestFloor.mask)
+  const floorMask = refineFloorMask(rawFloorMask)
 
-  // A detecção de objetos é um extra e nunca pode derrubar o resultado do piso.
   const occlusion = buildOcclusionMask(outputs, floorMask.width, floorMask.height)
 
   onProgress?.({ status: 'done', percent: 100, device: 'wasm' })
@@ -172,5 +238,6 @@ export async function segmentFloor(imageUrl, onProgress) {
     device: 'wasm',
     occlusionMask: occlusion.mask,
     detectedObjects: occlusion.labels,
+    refined: true,
   }
 }
