@@ -29,7 +29,6 @@ export default function App(){
       strength:strength/100,
       perspective,
       draftPoints:floorManual?floorPoints:perspectiveDraft,
-      focus:!!mask,
     })
   },[room,mask,product,mode,strength,perspective,perspectiveDraft,floorManual,floorPoints])
 
@@ -48,13 +47,13 @@ export default function App(){
     setBusy(true);setError('');setFloorManual(false);setPerspectiveManual(false);setPerspectiveDraft([]);setFloorPoints([])
     try{
       const m=await segmentFloor(room.dataUrl,e=>{
-        if(e.status==='inferencing') setStatus('Identificando o piso e separando objetos…')
+        if(e.status==='inferencing') setStatus('Identificando e refinando o piso…')
         else setStatus('Carregando IA no navegador…')
       })
       setMask(m)
       try{
         const p=estimateFloorPerspective(m,room.width,room.height)
-        setPerspective(p);setMode('perspective');setStatus('Piso detectado. A área ficou destacada e os objetos foram mantidos por cima.')
+        setPerspective(p);setMode('perspective');setStatus('Piso detectado e refinado. Confira a perspectiva ou veja o resultado.')
       }catch(perspectiveError){
         setPerspective(null);setMode('mask');setStatus('Piso detectado. Ajuste os 4 pontos da perspectiva manualmente.')
         setError(perspectiveError.message)
@@ -89,7 +88,7 @@ export default function App(){
       if(n.length===4){
         const m=polygonMask(room.width,room.height,n)
         setMask(m);setPerspective(buildPerspective(n,room.width,room.height,'manual-floor'));setFloorManual(false);setFloorPoints([]);setMode('perspective')
-        setStatus('Piso e perspectiva definidos manualmente. A área segue destacada do restante do ambiente.')
+        setStatus('Piso e perspectiva definidos manualmente.')
       }
       return
     }
@@ -116,8 +115,8 @@ export default function App(){
     x.drawImage(baseCanvasRef.current,0,0)
     x.drawImage(floorCanvasRef.current,0,0)
     x.drawImage(objectCanvasRef.current,0,0)
-    x.drawImage(uiCanvasRef.current,0,0)
     const a=document.createElement('a');a.download='floor-vision.png';a.href=temp.toDataURL('image/png');a.click()
+    setStatus('PNG exportado sem linhas, pontos ou marcações da interface.')
   }
 
   const hintCount=floorManual?floorPoints.length:perspectiveDraft.length
@@ -156,18 +155,18 @@ export default function App(){
 
         {mask&&<div className="perspectiveCard">
           <div className="perspectiveTitle"><div><small>CAMADAS</small><b>Piso separado do restante</b></div><span className="ready">ATIVO</span></div>
-          <p>A foto foi dividida em camadas: imagem base, piso aplicado, objetos em primeiro plano e interface. Isso ajuda a deixar o piso destacado e evita que mesa, sofá, cadeira ou tapete se misturem visualmente com o acabamento.</p>
+          <p>O piso fica em uma camada própria e os objetos detectados permanecem por cima. As marcações de edição não entram no PNG final.</p>
         </div>}
 
         {mask&&<div className="perspectiveCard">
           <div className="perspectiveTitle"><div><small>ETAPA 2</small><b>Geometria do piso</b></div><span className={perspective?'ready':''}>{perspective?'PRONTA':'AJUSTAR'}</span></div>
-          {perspective?<><p>{perspective.source==='auto'?'4 cantos estimados a partir da máscara da IA.':'4 cantos definidos manualmente.'}</p><div className="matrix"><span>Homografia H · 3×3</span>{matrix.map((row,i)=><code key={i}>{row.map(v=>Number(v).toFixed(3)).join('   ')}</code>)}</div><div className="perspectiveButtons"><button onClick={()=>setMode('perspective')}>Ver grade</button><button onClick={copyMatrix}>Copiar H</button></div></>:<><p>A máscara existe, mas a geometria precisa ser definida.</p><button className="fullSecondary" onClick={startPerspectiveManual}>Definir 4 pontos</button></>}
+          {perspective?<><p>{perspective.source==='auto'?'4 cantos estimados a partir da máscara refinada da IA.':'4 cantos definidos manualmente.'}</p><div className="matrix"><span>Homografia H · 3×3</span>{matrix.map((row,i)=><code key={i}>{row.map(v=>Number(v).toFixed(3)).join('   ')}</code>)}</div><div className="perspectiveButtons"><button onClick={()=>setMode('perspective')}>Ver grade</button><button onClick={copyMatrix}>Copiar H</button></div></>:<><p>A máscara existe, mas a geometria precisa ser definida.</p><button className="fullSecondary" onClick={startPerspectiveManual}>Definir 4 pontos</button></>}
         </div>}
 
-        <div className="control"><label>Intensidade <b>{strength}%</b></label><input type="range" min="55" max="100" value={strength} onChange={e=>setStrength(+e.target.value)}/><p>Sombras e iluminação da foto original são preservadas na composição. Na etapa atual, a área do piso também fica visualmente destacada do restante do ambiente.</p></div>
-        <button className="download" disabled={!mask||busy} onClick={download}>↓ Baixar resultado em PNG</button>
+        <div className="control"><label>Intensidade <b>{strength}%</b></label><input type="range" min="55" max="100" value={strength} onChange={e=>setStrength(+e.target.value)}/><p>Sombras e iluminação da foto original são preservadas. O contorno de edição aparece apenas nos modos Área destacada e Perspectiva.</p></div>
+        <button className="download" disabled={!mask||busy} onClick={download}>↓ Baixar PNG limpo</button>
       </aside>
     </main>
-    <footer>Camadas ativas · foto base + piso + objetos em primeiro plano + interface</footer>
+    <footer>Camadas ativas · exportação limpa sem overlays da interface</footer>
   </div>
 }
