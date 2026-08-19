@@ -1,39 +1,60 @@
 import { useEffect, useRef, useState } from 'react'
 import { segmentFloor } from './segmentFloor'
-import { PRODUCTS, loadImage, polygonMask, render, swatch } from './imageEngine'
+import { PRODUCTS, loadImage, polygonMask, renderScene, swatch } from './imageEngine'
 import { buildPerspective, estimateFloorPerspective, homographyText } from './perspective'
 
 export default function App(){
-  const canvasRef=useRef(null),fileRef=useRef(null)
+  const fileRef=useRef(null)
+  const baseCanvasRef=useRef(null),floorCanvasRef=useRef(null),objectCanvasRef=useRef(null),uiCanvasRef=useRef(null)
   const [room,setRoom]=useState(null),[mask,setMask]=useState(null),[product,setProduct]=useState(PRODUCTS[0])
   const [mode,setMode]=useState('result'),[busy,setBusy]=useState(false),[status,setStatus]=useState('Envie uma foto para começar'),[error,setError]=useState('')
   const [floorManual,setFloorManual]=useState(false),[floorPoints,setFloorPoints]=useState([])
   const [perspectiveManual,setPerspectiveManual]=useState(false),[perspectiveDraft,setPerspectiveDraft]=useState([]),[perspective,setPerspective]=useState(null)
   const [strength,setStrength]=useState(92)
 
+  const editing=floorManual||perspectiveManual
+  const matrix=perspective?homographyText(perspective.matrix):null
+  const topDetectLabel=mask?'✦ Detectar novamente com IA':'✦ Detectar piso com IA'
+
   useEffect(()=>{
-    if(room)render({canvas:canvasRef.current,image:room.image,mask,product,mode,strength:strength/100,perspective,draftPoints:perspectiveDraft})
-  },[room,mask,product,mode,strength,perspective,perspectiveDraft])
+    if(room)renderScene({
+      baseCanvas:baseCanvasRef.current,
+      floorCanvas:floorCanvasRef.current,
+      objectCanvas:objectCanvasRef.current,
+      uiCanvas:uiCanvasRef.current,
+      image:room.image,
+      mask,
+      product,
+      mode,
+      strength:strength/100,
+      perspective,
+      draftPoints:floorManual?floorPoints:perspectiveDraft,
+      focus:!!mask,
+    })
+  },[room,mask,product,mode,strength,perspective,perspectiveDraft,floorManual,floorPoints])
 
   async function pick(file){
     if(!file)return
     setError('');setBusy(true)
     try{
       const r=await loadImage(file)
-      setRoom(r);setMask(null);setPerspective(null);setFloorPoints([]);setPerspectiveDraft([]);setFloorManual(false);setPerspectiveManual(false);setMode('result')
-      setStatus('Foto pronta. Detecte o piso com IA.')
+      setRoom(r);setMask(null);setPerspective(null);setFloorPoints([]);setPerspectiveDraft([]);setFloorManual(false);setPerspectiveManual(false);setMode('original')
+      setStatus('Foto pronta. Detecte o piso com IA ou marque o piso manualmente.')
     }catch(e){setError(e.message)}finally{setBusy(false)}
   }
 
   async function ai(){
     if(!room)return
-    setBusy(true);setError('');setFloorManual(false);setPerspectiveManual(false);setPerspectiveDraft([])
+    setBusy(true);setError('');setFloorManual(false);setPerspectiveManual(false);setPerspectiveDraft([]);setFloorPoints([])
     try{
-      const m=await segmentFloor(room.dataUrl,e=>setStatus(e.status==='inferencing'?'Identificando o piso…':'Carregando IA no navegador…'))
+      const m=await segmentFloor(room.dataUrl,e=>{
+        if(e.status==='inferencing') setStatus('Identificando o piso e separando objetos…')
+        else setStatus('Carregando IA no navegador…')
+      })
       setMask(m)
       try{
         const p=estimateFloorPerspective(m,room.width,room.height)
-        setPerspective(p);setMode('perspective');setStatus('Piso detectado. Confira a grade de perspectiva.')
+        setPerspective(p);setMode('perspective');setStatus('Piso detectado. A área ficou destacada e os objetos foram mantidos por cima.')
       }catch(perspectiveError){
         setPerspective(null);setMode('mask');setStatus('Piso detectado. Ajuste os 4 pontos da perspectiva manualmente.')
         setError(perspectiveError.message)
@@ -46,7 +67,7 @@ export default function App(){
   function startManualFloor(){
     if(!room)return
     setMask(null);setPerspective(null);setFloorPoints([]);setPerspectiveDraft([]);setPerspectiveManual(false);setFloorManual(true);setMode('original')
-    setStatus('Marque 4 cantos do piso. A perspectiva será calculada junto.')
+    setStatus('Clique nos 4 cantos do piso. O restante da cena continuará separado em camadas.')
   }
 
   function startPerspectiveManual(){
@@ -56,24 +77,22 @@ export default function App(){
   }
 
   function canvasPoint(e){
-    const c=canvasRef.current,r=c.getBoundingClientRect()
+    const c=uiCanvasRef.current,r=c.getBoundingClientRect()
     return {x:(e.clientX-r.left)*(c.width/r.width),y:(e.clientY-r.top)*(c.height/r.height)}
   }
 
   function clickCanvas(e){
     if(!room)return
     const p=canvasPoint(e)
-
     if(floorManual&&floorPoints.length<4){
       const n=[...floorPoints,p];setFloorPoints(n)
       if(n.length===4){
         const m=polygonMask(room.width,room.height,n)
         setMask(m);setPerspective(buildPerspective(n,room.width,room.height,'manual-floor'));setFloorManual(false);setFloorPoints([]);setMode('perspective')
-        setStatus('Piso e perspectiva definidos manualmente. Confira a grade.')
+        setStatus('Piso e perspectiva definidos manualmente. A área segue destacada do restante do ambiente.')
       }
       return
     }
-
     if(perspectiveManual&&perspectiveDraft.length<4){
       const n=[...perspectiveDraft,p];setPerspectiveDraft(n)
       if(n.length===4){
@@ -86,35 +105,48 @@ export default function App(){
   async function copyMatrix(){
     if(!perspective)return
     const text=JSON.stringify(homographyText(perspective.matrix),null,2)
-    try{await navigator.clipboard.writeText(text);setStatus('Matriz de homografia copiada.')}catch{setStatus('Homografia calculada e pronta para a Etapa 3.')}
+    try{await navigator.clipboard.writeText(text);setStatus('Matriz de homografia copiada.')}catch{setStatus('Homografia calculada e pronta para a próxima etapa.')}
   }
 
   function download(){
-    if(!mask)return
-    setMode('result')
-    setTimeout(()=>{const a=document.createElement('a');a.download='floor-vision.png';a.href=canvasRef.current.toDataURL('image/png');a.click()},50)
+    if(!room||!mask)return
+    const temp=document.createElement('canvas')
+    temp.width=room.width;temp.height=room.height
+    const x=temp.getContext('2d')
+    x.drawImage(baseCanvasRef.current,0,0)
+    x.drawImage(floorCanvasRef.current,0,0)
+    x.drawImage(objectCanvasRef.current,0,0)
+    x.drawImage(uiCanvasRef.current,0,0)
+    const a=document.createElement('a');a.download='floor-vision.png';a.href=temp.toDataURL('image/png');a.click()
   }
 
-  const matrix=perspective?homographyText(perspective.matrix):null
-  const editing=floorManual||perspectiveManual
-  const count=floorManual?floorPoints.length:perspectiveDraft.length
+  const hintCount=floorManual?floorPoints.length:perspectiveDraft.length
 
   return <div className="app">
     <header><div className="brand"><b>FLOOR VISION</b><span>Visualizador de ambientes</span></div><button className="ghost" onClick={()=>location.reload()}>Reiniciar</button></header>
     <main>
       <section className="viewer">
-        <div className="viewerHead"><div><small>AMBIENTE</small><h1>Veja o produto antes de instalar.</h1></div>{room&&mask&&<div className="tabs"><button className={mode==='result'?'on':''} onClick={()=>setMode('result')}>Resultado</button><button className={mode==='perspective'?'on':''} onClick={()=>setMode('perspective')}>Perspectiva</button><button className={mode==='mask'?'on':''} onClick={()=>setMode('mask')}>Máscara IA</button><button className={mode==='original'?'on':''} onClick={()=>setMode('original')}>Original</button></div>}</div>
+        <div className="viewerHead"><div><small>AMBIENTE</small><h1>Veja o produto antes de instalar.</h1></div>{room&&mask&&<div className="tabs"><button className={mode==='result'?'on':''} onClick={()=>setMode('result')}>Resultado</button><button className={mode==='perspective'?'on':''} onClick={()=>setMode('perspective')}>Perspectiva</button><button className={mode==='mask'?'on':''} onClick={()=>setMode('mask')}>Área destacada</button><button className={mode==='original'?'on':''} onClick={()=>setMode('original')}>Original</button></div>}</div>
         <div className={'stage '+(editing?'manual':'')}>
-          {!room?<button className="drop" onClick={()=>fileRef.current?.click()}><strong>↑</strong><b>Envie uma foto do ambiente</b><span>JPG, PNG ou WEBP</span></button>:<canvas ref={canvasRef} onClick={clickCanvas}/>} 
-          {room&&!editing&&<button className="aiFloating" disabled={busy} onClick={ai}>{busy?'Processando com IA…':mask?'✦ Detectar novamente com IA':'✦ Detectar piso com IA'}</button>}
-          {editing&&<div className="hint">Marque 4 pontos · {count}/4</div>}
+          {!room?<button className="drop" onClick={()=>fileRef.current?.click()}><strong>↑</strong><b>Envie uma foto do ambiente</b><span>JPG, PNG ou WEBP</span></button>:<>
+            <div className="stageTools">
+              <button className="topPrimary" disabled={busy} onClick={ai}>{busy?'Processando…':topDetectLabel}</button>
+              <button className="topGhost" onClick={mask?startPerspectiveManual:startManualFloor}>{mask?'Ajustar 4 pontos':'Marcar piso manualmente'}</button>
+            </div>
+            <div className="canvasStack">
+              <canvas ref={baseCanvasRef}/>
+              <canvas ref={floorCanvasRef}/>
+              <canvas ref={objectCanvasRef}/>
+              <canvas ref={uiCanvasRef} onClick={clickCanvas}/>
+            </div>
+          </>} 
+          {editing&&<div className="hint">Marque 4 pontos · {hintCount}/4</div>}
         </div>
         <input ref={fileRef} hidden type="file" accept="image/*" onChange={e=>pick(e.target.files?.[0])}/>
-        <div className="viewerFoot"><div className="status"><i className={mask&&perspective?'ok':''}/>{status}</div><div className="actions">
-          {room&&<button className="secondary" onClick={startManualFloor}>{mask?'Redefinir piso manualmente':'Marcar piso manualmente'}</button>}
-          {room&&<button className="primary" disabled={busy} onClick={ai}>{busy?'Processando…':mask?'✦ Detectar novamente com IA':'✦ Detectar piso com IA'}</button>}
-          {room&&mask&&<button className="secondary" onClick={startPerspectiveManual}>Ajustar 4 pontos</button>}
-          {room&&mask&&<button className="primary" onClick={()=>setMode('perspective')}>▦ Ver perspectiva</button>}
+        <div className="viewerFoot"><div className="status"><i className={mask?'ok':''}/>{status}</div><div className="actions">
+          {room&&<button className="primary" disabled={busy} onClick={ai}>{busy?'Processando…':topDetectLabel}</button>}
+          {room&&<button className="secondary" onClick={mask?startPerspectiveManual:startManualFloor}>{mask?'Ajustar 4 pontos':'Marcar piso manualmente'}</button>}
+          {room&&mask&&<button className="secondary" onClick={()=>setMode('perspective')}>▦ Ver perspectiva</button>}
         </div></div>
         {error&&<div className="error">{error}</div>}
       </section>
@@ -123,14 +155,19 @@ export default function App(){
         <div className="products">{PRODUCTS.map(p=><button key={p.id} className={'product '+(p.id===product.id?'selected':'')} onClick={()=>setProduct(p)}><div className="swatch" style={swatch(p)}/><b>{p.name}</b></button>)}</div>
 
         {mask&&<div className="perspectiveCard">
+          <div className="perspectiveTitle"><div><small>CAMADAS</small><b>Piso separado do restante</b></div><span className="ready">ATIVO</span></div>
+          <p>A foto foi dividida em camadas: imagem base, piso aplicado, objetos em primeiro plano e interface. Isso ajuda a deixar o piso destacado e evita que mesa, sofá, cadeira ou tapete se misturem visualmente com o acabamento.</p>
+        </div>}
+
+        {mask&&<div className="perspectiveCard">
           <div className="perspectiveTitle"><div><small>ETAPA 2</small><b>Geometria do piso</b></div><span className={perspective?'ready':''}>{perspective?'PRONTA':'AJUSTAR'}</span></div>
           {perspective?<><p>{perspective.source==='auto'?'4 cantos estimados a partir da máscara da IA.':'4 cantos definidos manualmente.'}</p><div className="matrix"><span>Homografia H · 3×3</span>{matrix.map((row,i)=><code key={i}>{row.map(v=>Number(v).toFixed(3)).join('   ')}</code>)}</div><div className="perspectiveButtons"><button onClick={()=>setMode('perspective')}>Ver grade</button><button onClick={copyMatrix}>Copiar H</button></div></>:<><p>A máscara existe, mas a geometria precisa ser definida.</p><button className="fullSecondary" onClick={startPerspectiveManual}>Definir 4 pontos</button></>}
         </div>}
 
-        <div className="control"><label>Intensidade <b>{strength}%</b></label><input type="range" min="55" max="100" value={strength} onChange={e=>setStrength(+e.target.value)}/><p>Sombras e iluminação da foto original são preservadas na composição.</p></div>
+        <div className="control"><label>Intensidade <b>{strength}%</b></label><input type="range" min="55" max="100" value={strength} onChange={e=>setStrength(+e.target.value)}/><p>Sombras e iluminação da foto original são preservadas na composição. Na etapa atual, a área do piso também fica visualmente destacada do restante do ambiente.</p></div>
         <button className="download" disabled={!mask||busy} onClick={download}>↓ Baixar resultado em PNG</button>
       </aside>
     </main>
-    <footer>Etapa 2 ativa · máscara + quadrilátero + homografia calculados no navegador</footer>
+    <footer>Camadas ativas · foto base + piso + objetos em primeiro plano + interface</footer>
   </div>
 }
