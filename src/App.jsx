@@ -106,12 +106,13 @@ export default function App(){
         <div className="viewerHead"><div><small>AMBIENTE</small><h1>Veja o produto antes de instalar.</h1></div>{room&&mask&&<div className="tabs"><button className={mode==='result'?'on':''} onClick={()=>setMode('result')}>Resultado</button><button className={mode==='perspective'?'on':''} onClick={()=>setMode('perspective')}>Perspectiva</button><button className={mode==='mask'?'on':''} onClick={()=>setMode('mask')}>Máscara IA</button><button className={mode==='original'?'on':''} onClick={()=>setMode('original')}>Original</button></div>}</div>
         <div className={'stage '+(editing?'manual':'')}>
           {!room?<button className="drop" onClick={()=>fileRef.current?.click()}><strong>↑</strong><b>Envie uma foto do ambiente</b><span>JPG, PNG ou WEBP</span></button>:<canvas ref={canvasRef} onClick={clickCanvas}/>} 
+          {room&&!editing&&<button className="aiFloating" disabled={busy} onClick={ai}>{busy?'Processando com IA…':mask?'✦ Detectar novamente com IA':'✦ Detectar piso com IA'}</button>}
           {editing&&<div className="hint">Marque 4 pontos · {count}/4</div>}
         </div>
         <input ref={fileRef} hidden type="file" accept="image/*" onChange={e=>pick(e.target.files?.[0])}/>
         <div className="viewerFoot"><div className="status"><i className={mask&&perspective?'ok':''}/>{status}</div><div className="actions">
-          {room&&!mask&&<button className="secondary" onClick={startManualFloor}>Marcar piso manualmente</button>}
-          {room&&!mask&&<button className="primary" disabled={busy} onClick={ai}>{busy?'Processando…':'✦ Detectar piso com IA'}</button>}
+          {room&&<button className="secondary" onClick={startManualFloor}>{mask?'Redefinir piso manualmente':'Marcar piso manualmente'}</button>}
+          {room&&<button className="primary" disabled={busy} onClick={ai}>{busy?'Processando…':mask?'✦ Detectar novamente com IA':'✦ Detectar piso com IA'}</button>}
           {room&&mask&&<button className="secondary" onClick={startPerspectiveManual}>Ajustar 4 pontos</button>}
           {room&&mask&&<button className="primary" onClick={()=>setMode('perspective')}>▦ Ver perspectiva</button>}
         </div></div>
