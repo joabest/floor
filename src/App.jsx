@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { segmentFloor } from './segmentFloor'
+import { preloadFloorAI, segmentFloor } from './segmentFloor'
 import { PRODUCTS, exportCleanScene, loadImage, polygonMask, renderScene, swatch } from './imageEngine'
 import { buildPerspective, estimateFloorPerspective, homographyText } from './perspective'
 
@@ -38,7 +38,14 @@ export default function App(){
     try{
       const r=await loadImage(file)
       setRoom(r);setMask(null);setPerspective(null);setFloorPoints([]);setPerspectiveDraft([]);setFloorManual(false);setPerspectiveManual(false);setMode('original')
-      setStatus('Foto pronta. Detecte o piso com IA ou marque o piso manualmente.')
+      setStatus('Foto pronta. Preparando IA…')
+
+      preloadFloorAI((e)=>{
+        if(e.status==='ready') setStatus('IA pronta. Clique em Detectar piso com IA.')
+        else if(typeof e.percent==='number') setStatus(`Preparando IA… ${e.percent}%`)
+      }).then((ready)=>{
+        if(!ready) setStatus('Foto pronta. Clique em Detectar piso com IA.')
+      })
     }catch(e){setError(e.message)}finally{setBusy(false)}
   }
 
@@ -47,15 +54,14 @@ export default function App(){
     setBusy(true);setError('');setFloorManual(false);setPerspectiveManual(false);setPerspectiveDraft([]);setFloorPoints([])
     try{
       const m=await segmentFloor(room.dataUrl,e=>{
-        if(e.status==='fallback') setStatus('GPU indisponível. Continuando em CPU otimizada…')
-        else if(e.status==='inferencing') setStatus(e.device==='webgpu'?'Detectando piso com GPU…':'Detectando piso com CPU otimizada…')
-        else if(typeof e.percent==='number') setStatus(`Carregando IA… ${e.percent}%`)
+        if(e.status==='inferencing') setStatus('Identificando e refinando o piso…')
+        else if(typeof e.percent==='number') setStatus(`Preparando IA… ${e.percent}%`)
         else setStatus('Preparando IA…')
       })
       setMask(m)
       try{
         const p=estimateFloorPerspective(m,room.width,room.height)
-        setPerspective(p);setMode('result');setStatus(`Piso detectado${m.device==='webgpu'?' com GPU':''}. Resultado pronto para revisar.`)
+        setPerspective(p);setMode('result');setStatus('Piso detectado e refinado. Resultado pronto para revisar.')
       }catch(perspectiveError){
         setPerspective(null);setMode('mask');setStatus('Piso detectado. Ajuste os 4 pontos da perspectiva manualmente.')
         setError(perspectiveError.message)
@@ -172,6 +178,6 @@ export default function App(){
         <button className="download" disabled={!mask||busy} onClick={download}>↓ Baixar PNG limpo</button>
       </aside>
     </main>
-    <footer>Floor Vision v0.2.5 · export offscreen limpo · WebGPU com fallback q8</footer>
+    <footer>Floor Vision v0.2.6 · pipeline oficial do SegFormer · pré-carregamento da IA</footer>
   </div>
 }
