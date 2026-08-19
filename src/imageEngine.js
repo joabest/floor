@@ -15,7 +15,7 @@ export function loadImage(file, max=1600){
     r.onload=()=>{ const img=new Image(); img.onerror=()=>reject(new Error('Imagem inválida.')); img.onload=()=>{
       const s=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight)); const w=Math.round(img.naturalWidth*s), h=Math.round(img.naturalHeight*s)
       const c=document.createElement('canvas'); c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h)
-      const dataUrl=c.toDataURL('image/jpeg',.92); const out=new Image(); out.onload=()=>resolve({image:out,dataUrl,width:w,height:h}); out.src=dataUrl
+      const dataUrl=c.toDataURL('image/jpeg',.94); const out=new Image(); out.onload=()=>resolve({image:out,dataUrl,width:w,height:h}); out.src=dataUrl
     }; img.src=String(r.result)}; r.readAsDataURL(file)
   })
 }
@@ -28,11 +28,19 @@ export function polygonMask(w,h,points){
 function setCanvasSize(canvas,w,h){if(canvas){canvas.width=w;canvas.height=h}}
 function clear(ctx,w,h){ctx.clearRect(0,0,w,h)}
 
-function buildMaskCanvas(mask,w,h){
+function rawMaskCanvas(mask){
   const s=document.createElement('canvas');s.width=mask.width;s.height=mask.height;const sx=s.getContext('2d');const d=sx.createImageData(mask.width,mask.height)
-  for(let i=0;i<mask.data.length;i++){const p=i*4,v=mask.data[i];d.data[p]=d.data[p+1]=d.data[p+2]=255;d.data[p+3]=v} sx.putImageData(d,0,0)
-  if(mask.width===w&&mask.height===h) return s
-  const t=document.createElement('canvas');t.width=w;t.height=h;t.getContext('2d').drawImage(s,0,0,w,h);return t
+  for(let i=0;i<mask.data.length;i++){const p=i*4,v=mask.data[i];d.data[p]=d.data[p+1]=d.data[p+2]=255;d.data[p+3]=v}
+  sx.putImageData(d,0,0);return s
+}
+
+function buildMaskCanvas(mask,w,h,{feather=0}={}){
+  const s=rawMaskCanvas(mask)
+  const t=document.createElement('canvas');t.width=w;t.height=h;const tx=t.getContext('2d')
+  tx.imageSmoothingEnabled=true
+  if(feather>0){tx.save();tx.filter=`blur(${feather}px)`;tx.drawImage(s,0,0,w,h);tx.restore()}
+  else tx.drawImage(s,0,0,w,h)
+  return t
 }
 
 function textureCanvas(w,h,p){
@@ -55,44 +63,44 @@ function blendFloor(ctx,image,maskCanvas,product,w,h,strength){
   const out=ctx.createImageData(w,h)
   for(let i=0;i<w*h;i++){
     const p=i*4,a=(mask[p+3]/255)*strength
-    if(!a){out.data[p+3]=0;continue}
+    if(a<.01){out.data[p+3]=0;continue}
     const r=orig.data[p],g=orig.data[p+1],b=orig.data[p+2]
     const lum=(.2126*r+.7152*g+.0722*b)/255
-    const shade=.46+lum*.82
+    const shade=.48+lum*.78
     out.data[p]=r*(1-a)+Math.min(255,t[p]*shade)*a
     out.data[p+1]=g*(1-a)+Math.min(255,t[p+1]*shade)*a
     out.data[p+2]=b*(1-a)+Math.min(255,t[p+2]*shade)*a
-    out.data[p+3]=Math.round(mask[p+3]*Math.max(.84,a))
+    out.data[p+3]=Math.round(mask[p+3]*Math.max(.82,a))
   }
   ctx.putImageData(out,0,0)
 }
 
 function drawOcclusionLayer(ctx,image,occlusionMask,w,h){
   if(!occlusionMask?.data) return
-  const maskCanvas=buildMaskCanvas(occlusionMask,w,h)
+  const maskCanvas=buildMaskCanvas(occlusionMask,w,h,{feather:1})
   ctx.save();ctx.drawImage(image,0,0,w,h);ctx.globalCompositeOperation='destination-in';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
 }
 
 function drawFocusOverlay(ctx,maskCanvas,w,h){
-  ctx.save();ctx.fillStyle='rgba(6,9,15,.46)';ctx.fillRect(0,0,w,h);ctx.globalCompositeOperation='destination-out';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
-  ctx.save();ctx.globalAlpha=.16;ctx.fillStyle='#4169e1';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
+  ctx.save();ctx.fillStyle='rgba(6,9,15,.24)';ctx.fillRect(0,0,w,h);ctx.globalCompositeOperation='destination-out';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
+  ctx.save();ctx.globalAlpha=.07;ctx.fillStyle='#4169e1';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
 }
 
 function drawMaskMode(ctx,maskCanvas,w,h){
   drawFocusOverlay(ctx,maskCanvas,w,h)
-  ctx.save();ctx.globalAlpha=.34;ctx.fillStyle='#4169e1';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
+  ctx.save();ctx.globalAlpha=.18;ctx.fillStyle='#4169e1';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
 }
 
 function polygonPath(ctx,points){ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath()}
-function drawPoint(ctx,p,active=true){ctx.save();ctx.fillStyle=active?'#ffffff':'#9fb2f5';ctx.beginPath();ctx.arc(p.x,p.y,5.5,0,Math.PI*2);ctx.fill();ctx.lineWidth=2;ctx.strokeStyle='#4169e1';ctx.stroke();ctx.restore()}
+function drawPoint(ctx,p,active=true){ctx.save();ctx.fillStyle=active?'rgba(255,255,255,.9)':'rgba(159,178,245,.75)';ctx.beginPath();ctx.arc(p.x,p.y,4.5,0,Math.PI*2);ctx.fill();ctx.lineWidth=1.25;ctx.strokeStyle='rgba(65,105,225,.55)';ctx.stroke();ctx.restore()}
 
 function drawPerspectiveGrid(ctx,perspective){
   if(!perspective?.points?.length) return
   const points=perspective.points
   ctx.save()
-  ctx.fillStyle='rgba(65,105,225,.12)';polygonPath(ctx,points);ctx.fill()
-  ctx.lineWidth=2.2;ctx.strokeStyle='rgba(112,151,255,.96)';polygonPath(ctx,points);ctx.stroke()
-  ctx.lineWidth=1;ctx.strokeStyle='rgba(191,211,255,.48)'
+  ctx.fillStyle='rgba(65,105,225,.045)';polygonPath(ctx,points);ctx.fill()
+  ctx.lineWidth=1.4;ctx.strokeStyle='rgba(112,151,255,.42)';polygonPath(ctx,points);ctx.stroke()
+  ctx.lineWidth=.7;ctx.strokeStyle='rgba(191,211,255,.20)'
   const steps=8, segments=28
   for(let i=1;i<steps;i++){
     const t=i/steps
@@ -109,13 +117,13 @@ function drawPerspectiveGrid(ctx,perspective){
 
 function drawDraftQuad(ctx,draftPoints){
   if(!draftPoints?.length) return
-  ctx.save();ctx.strokeStyle='rgba(112,151,255,.95)';ctx.lineWidth=2;ctx.fillStyle='rgba(65,105,225,.14)'
+  ctx.save();ctx.strokeStyle='rgba(112,151,255,.55)';ctx.lineWidth=1.5;ctx.fillStyle='rgba(65,105,225,.06)'
   ctx.beginPath();draftPoints.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); if(draftPoints.length>2) ctx.fill(); ctx.stroke()
   draftPoints.forEach((p)=>drawPoint(ctx,p,draftPoints.length===4))
   ctx.restore()
 }
 
-export function renderScene({baseCanvas,floorCanvas,objectCanvas,uiCanvas,image,mask,product,mode='result',strength=.92,perspective=null,draftPoints=[],focus=false}){
+export function renderScene({baseCanvas,floorCanvas,objectCanvas,uiCanvas,image,mask,product,mode='result',strength=.92,perspective=null,draftPoints=[]}){
   if(!image) return
   const w=image.naturalWidth||image.width,h=image.naturalHeight||image.height
   ;[baseCanvas,floorCanvas,objectCanvas,uiCanvas].forEach((canvas)=>setCanvasSize(canvas,w,h))
@@ -124,17 +132,15 @@ export function renderScene({baseCanvas,floorCanvas,objectCanvas,uiCanvas,image,
   clear(bx,w,h);clear(fx,w,h);clear(ox,w,h);clear(ux,w,h)
   bx.drawImage(image,0,0,w,h)
   if(!mask){ if(draftPoints?.length) drawDraftQuad(ux,draftPoints); return }
-  const maskCanvas=buildMaskCanvas(mask,w,h)
-  const shouldFocus=focus||mode==='mask'||mode==='perspective'
-  if(shouldFocus) drawFocusOverlay(ux,maskCanvas,w,h)
-  if(mode==='mask') drawMaskMode(ux,maskCanvas,w,h)
-  if(mode!=='original'&&mode!=='mask'&&product) blendFloor(fx,image,maskCanvas,product,w,h,strength)
+
+  const displayMask=buildMaskCanvas(mask,w,h,{feather:1.2})
+  const floorMask=buildMaskCanvas(mask,w,h,{feather:1.6})
+
+  if(mode==='mask') drawMaskMode(ux,displayMask,w,h)
+  if(mode==='perspective') drawFocusOverlay(ux,displayMask,w,h)
+  if(mode!=='original'&&mode!=='mask'&&product) blendFloor(fx,image,floorMask,product,w,h,strength)
   if(mask.occlusionMask) drawOcclusionLayer(ox,image,mask.occlusionMask,w,h)
   if(mode==='perspective'&&perspective) drawPerspectiveGrid(ux,perspective)
-  else if(perspective&&mode==='result'){
-    ux.save();ux.strokeStyle='rgba(112,151,255,.72)';ux.lineWidth=1.5;polygonPath(ux,perspective.points);ux.stroke();ux.restore()
-    perspective.points.forEach((p)=>drawPoint(ux,p,false))
-  }
   if(draftPoints?.length) drawDraftQuad(ux,draftPoints)
 }
 
