@@ -9,7 +9,7 @@ export const PRODUCTS = [
   { id:'graphite', name:'Porcelanato Grafite', base:'#34383c', line:'#62676b', type:'tile' },
 ]
 
-export function loadImage(file, max=1600){
+export function loadImage(file, max=1440){
   return new Promise((resolve,reject)=>{
     const r=new FileReader(); r.onerror=()=>reject(new Error('Falha ao ler imagem.'))
     r.onload=()=>{ const img=new Image(); img.onerror=()=>reject(new Error('Imagem inválida.')); img.onload=()=>{
@@ -82,25 +82,25 @@ function drawOcclusionLayer(ctx,image,occlusionMask,w,h){
 }
 
 function drawFocusOverlay(ctx,maskCanvas,w,h){
-  ctx.save();ctx.fillStyle='rgba(6,9,15,.24)';ctx.fillRect(0,0,w,h);ctx.globalCompositeOperation='destination-out';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
-  ctx.save();ctx.globalAlpha=.07;ctx.fillStyle='#4169e1';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
+  ctx.save();ctx.fillStyle='rgba(6,9,15,.20)';ctx.fillRect(0,0,w,h);ctx.globalCompositeOperation='destination-out';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
+  ctx.save();ctx.globalAlpha=.045;ctx.fillStyle='#4169e1';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
 }
 
 function drawMaskMode(ctx,maskCanvas,w,h){
   drawFocusOverlay(ctx,maskCanvas,w,h)
-  ctx.save();ctx.globalAlpha=.18;ctx.fillStyle='#4169e1';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
+  ctx.save();ctx.globalAlpha=.12;ctx.fillStyle='#4169e1';ctx.drawImage(maskCanvas,0,0,w,h);ctx.restore()
 }
 
 function polygonPath(ctx,points){ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath()}
-function drawPoint(ctx,p,active=true){ctx.save();ctx.fillStyle=active?'rgba(255,255,255,.9)':'rgba(159,178,245,.75)';ctx.beginPath();ctx.arc(p.x,p.y,4.5,0,Math.PI*2);ctx.fill();ctx.lineWidth=1.25;ctx.strokeStyle='rgba(65,105,225,.55)';ctx.stroke();ctx.restore()}
+function drawPoint(ctx,p,active=true){ctx.save();ctx.fillStyle=active?'rgba(255,255,255,.8)':'rgba(159,178,245,.6)';ctx.beginPath();ctx.arc(p.x,p.y,4,0,Math.PI*2);ctx.fill();ctx.lineWidth=1;ctx.strokeStyle='rgba(65,105,225,.38)';ctx.stroke();ctx.restore()}
 
 function drawPerspectiveGrid(ctx,perspective){
   if(!perspective?.points?.length) return
   const points=perspective.points
   ctx.save()
-  ctx.fillStyle='rgba(65,105,225,.045)';polygonPath(ctx,points);ctx.fill()
-  ctx.lineWidth=1.4;ctx.strokeStyle='rgba(112,151,255,.42)';polygonPath(ctx,points);ctx.stroke()
-  ctx.lineWidth=.7;ctx.strokeStyle='rgba(191,211,255,.20)'
+  ctx.fillStyle='rgba(65,105,225,.025)';polygonPath(ctx,points);ctx.fill()
+  ctx.lineWidth=1;ctx.strokeStyle='rgba(112,151,255,.28)';polygonPath(ctx,points);ctx.stroke()
+  ctx.lineWidth=.6;ctx.strokeStyle='rgba(191,211,255,.12)'
   const steps=8, segments=28
   for(let i=1;i<steps;i++){
     const t=i/steps
@@ -117,7 +117,7 @@ function drawPerspectiveGrid(ctx,perspective){
 
 function drawDraftQuad(ctx,draftPoints){
   if(!draftPoints?.length) return
-  ctx.save();ctx.strokeStyle='rgba(112,151,255,.55)';ctx.lineWidth=1.5;ctx.fillStyle='rgba(65,105,225,.06)'
+  ctx.save();ctx.strokeStyle='rgba(112,151,255,.42)';ctx.lineWidth=1.25;ctx.fillStyle='rgba(65,105,225,.04)'
   ctx.beginPath();draftPoints.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); if(draftPoints.length>2) ctx.fill(); ctx.stroke()
   draftPoints.forEach((p)=>drawPoint(ctx,p,draftPoints.length===4))
   ctx.restore()
@@ -135,13 +135,34 @@ export function renderScene({baseCanvas,floorCanvas,objectCanvas,uiCanvas,image,
 
   const displayMask=buildMaskCanvas(mask,w,h,{feather:1.2})
   const floorMask=buildMaskCanvas(mask,w,h,{feather:1.6})
-
   if(mode==='mask') drawMaskMode(ux,displayMask,w,h)
   if(mode==='perspective') drawFocusOverlay(ux,displayMask,w,h)
   if(mode!=='original'&&mode!=='mask'&&product) blendFloor(fx,image,floorMask,product,w,h,strength)
   if(mask.occlusionMask) drawOcclusionLayer(ox,image,mask.occlusionMask,w,h)
   if(mode==='perspective'&&perspective) drawPerspectiveGrid(ux,perspective)
   if(draftPoints?.length) drawDraftQuad(ux,draftPoints)
+}
+
+export function exportCleanScene({image,mask,product,strength=.92}){
+  if(!image) throw new Error('Imagem não disponível para exportação.')
+  const w=image.naturalWidth||image.width,h=image.naturalHeight||image.height
+  const output=document.createElement('canvas');output.width=w;output.height=h
+  const out=output.getContext('2d')
+  out.drawImage(image,0,0,w,h)
+  if(!mask||!product) return output
+
+  // Renderização totalmente nova: nenhuma camada de UI, grade, ponto ou contorno é reutilizada.
+  const cleanFloor=document.createElement('canvas');cleanFloor.width=w;cleanFloor.height=h
+  const floorMask=buildMaskCanvas(mask,w,h,{feather:1.6})
+  blendFloor(cleanFloor.getContext('2d'),image,floorMask,product,w,h,strength)
+  out.drawImage(cleanFloor,0,0)
+
+  if(mask.occlusionMask){
+    const cleanObjects=document.createElement('canvas');cleanObjects.width=w;cleanObjects.height=h
+    drawOcclusionLayer(cleanObjects.getContext('2d'),image,mask.occlusionMask,w,h)
+    out.drawImage(cleanObjects,0,0)
+  }
+  return output
 }
 
 export function swatch(p){return p.type==='wood'?{backgroundColor:p.base,backgroundImage:`repeating-linear-gradient(0deg,transparent 0 22px,${p.line}77 22px 24px)`}:{backgroundColor:p.base,backgroundImage:`linear-gradient(${p.line}99 2px,transparent 2px),linear-gradient(90deg,${p.line}99 2px,transparent 2px)`,backgroundSize:'42px 42px'}}
